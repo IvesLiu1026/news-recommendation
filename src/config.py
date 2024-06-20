@@ -1,6 +1,6 @@
 import os
 
-model_name = os.environ['MODEL_NAME'] if 'MODEL_NAME' in os.environ else 'TANR'
+model_name = os.environ['MODEL_NAME'] if 'MODEL_NAME' in os.environ else 'NRMS'
 # Currently included model
 assert model_name in [
     'NRMS', 'NAML', 'LSTUR', 'DKN', 'HiFiArk', 'TANR', 'Exp1'

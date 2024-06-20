@@ -10,7 +10,7 @@ from config import model_name
 from tqdm import tqdm
 import os
 from pathlib import Path
-from evaluate import evaluate
+from evaluate import save_predictions
 import importlib
 import datetime
 
@@ -145,8 +145,8 @@ def train():
     if checkpoint_path is not None:
         print(f"Load saved parameters in {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path)
-        early_stopping(checkpoint['early_stop_value'])
-        step = checkpoint['step']
+        # early_stopping(checkpoint['early_stop_value'])
+        # step = checkpoint['step']
         if model_name != 'Exp1':
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -244,38 +244,37 @@ def train():
             )
 
         if i % config.num_batches_validate == 0:
-            (model if model_name != 'Exp1' else models[0]).eval()
-            val_auc, val_mrr, val_ndcg5, val_ndcg10 = evaluate(
-                model if model_name != 'Exp1' else models[0], '../data/val',
-                config.num_workers, 200000)
-            (model if model_name != 'Exp1' else models[0]).train()
-            writer.add_scalar('Validation/AUC', val_auc, step)
-            writer.add_scalar('Validation/MRR', val_mrr, step)
-            writer.add_scalar('Validation/nDCG@5', val_ndcg5, step)
-            writer.add_scalar('Validation/nDCG@10', val_ndcg10, step)
-            tqdm.write(
-                f"Time {time_since(start_time)}, batches {i}, validation AUC: {val_auc:.4f}, validation MRR: {val_mrr:.4f}, validation nDCG@5: {val_ndcg5:.4f}, validation nDCG@10: {val_ndcg10:.4f}, "
-            )
+            # Comment out or remove the evaluation function call
+            # (model if model_name != 'Exp1' else models[0]).eval()
+            # val_auc, val_mrr, val_ndcg5, val_ndcg10 = evaluate(
+            #     model if model_name != 'Exp1' else models[0], '../data/val',
+            #     config.num_workers, 200000)
+            # (model if model_name != 'Exp1' else models[0]).train()
+            # writer.add_scalar('Validation/AUC', val_auc, step)
+            # writer.add_scalar('Validation/MRR', val_mrr, step)
+            # writer.add_scalar('Validation/nDCG@5', val_ndcg5, step)
+            # writer.add_scalar('Validation/nDCG@10', val_ndcg10, step)
+            # tqdm.write(
+            #     f"Time {time_since(start_time)}, batches {i}, validation AUC: {val_auc:.4f}, validation MRR: {val_mrr:.4f}, validation nDCG@5: {val_ndcg5:.4f}, validation nDCG@10: {val_ndcg10:.4f}, "
+            # )
 
-            early_stop, get_better = early_stopping(-val_auc)
-            if early_stop:
-                tqdm.write('Early stop.')
-                break
-            elif get_better:
-                try:
-                    torch.save(
-                        {
-                            'model_state_dict': (model if model_name != 'Exp1'
-                                                 else models[0]).state_dict(),
-                            'optimizer_state_dict':
-                            (optimizer if model_name != 'Exp1' else
-                             optimizers[0]).state_dict(),
-                            'step':
-                            step,
-                        }, f"../checkpoint/{model_name}/ckpt-{step}.pth")
-                except OSError as error:
-                    print(f"OS error: {error}")
+            # Save model checkpoint
+            try:
+                torch.save(
+                    {
+                        'model_state_dict': (model if model_name != 'Exp1'
+                                            else models[0]).state_dict(),
+                        'optimizer_state_dict':
+                        (optimizer if model_name != 'Exp1' else
+                        optimizers[0]).state_dict(),
+                        'step':
+                        step,
+                    }, f"../checkpoint/{model_name}/ckpt-{step}.pth")
+            except OSError as error:
+                print(f"OS error: {error}")
 
+            # Save predictions
+            save_predictions(model if model_name != 'Exp1' else models[0], '../data/val', config.num_workers)
 
 def time_since(since):
     """

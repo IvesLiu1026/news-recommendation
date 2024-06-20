@@ -1,15 +1,12 @@
 import numpy as np
-from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 import torch
 from config import model_name
 from torch.utils.data import Dataset, DataLoader
 from os import path
-import sys
 import pandas as pd
 from ast import literal_eval
 import importlib
-from multiprocessing import Pool
 
 try:
     Model = getattr(importlib.import_module(f"model.{model_name}"), model_name)
@@ -20,38 +17,7 @@ except AttributeError:
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-
-def dcg_score(y_true, y_score, k=10):
-    order = np.argsort(y_score)[::-1]
-    y_true = np.take(y_true, order[:k])
-    gains = 2**y_true - 1
-    discounts = np.log2(np.arange(len(y_true)) + 2)
-    return np.sum(gains / discounts)
-
-
-def ndcg_score(y_true, y_score, k=10):
-    best = dcg_score(y_true, y_true, k)
-    actual = dcg_score(y_true, y_score, k)
-    return actual / best
-
-
-def mrr_score(y_true, y_score):
-    order = np.argsort(y_score)[::-1]
-    y_true = np.take(y_true, order)
-    rr_score = y_true / (np.arange(len(y_true)) + 1)
-    return np.sum(rr_score) / np.sum(y_true)
-
-
-def value2rank(d):
-    values = list(d.values())
-    ranks = [sorted(values, reverse=True).index(x) for x in values]
-    return {k: ranks[i] + 1 for i, k in enumerate(d.keys())}
-
-
 class NewsDataset(Dataset):
-    """
-    Load news for evaluation.
-    """
     def __init__(self, news_path):
         super(NewsDataset, self).__init__()
         self.news_parsed = pd.read_table(
@@ -79,9 +45,6 @@ class NewsDataset(Dataset):
 
 
 class UserDataset(Dataset):
-    """
-    Load users for evaluation, duplicated rows will be dropped
-    """
     def __init__(self, behaviors_path, user2int_path):
         super(UserDataset, self).__init__()
         self.behaviors = pd.read_table(behaviors_path,
@@ -127,9 +90,6 @@ class UserDataset(Dataset):
 
 
 class BehaviorsDataset(Dataset):
-    """
-    Load behaviors for evaluation, (user, time) pair as session
-    """
     def __init__(self, behaviors_path):
         super(BehaviorsDataset, self).__init__()
         self.behaviors = pd.read_table(behaviors_path,
@@ -157,31 +117,8 @@ class BehaviorsDataset(Dataset):
         return item
 
 
-def calculate_single_user_metric(pair):
-    try:
-        auc = roc_auc_score(*pair)
-        mrr = mrr_score(*pair)
-        ndcg5 = ndcg_score(*pair, 5)
-        ndcg10 = ndcg_score(*pair, 10)
-        return [auc, mrr, ndcg5, ndcg10]
-    except ValueError:
-        return [np.nan] * 4
-
-
 @torch.no_grad()
-def evaluate(model, directory, num_workers, max_count=sys.maxsize):
-    """
-    Evaluate model on target directory.
-    Args:
-        model: model to be evaluated
-        directory: the directory that contains two files (behaviors.tsv, news_parsed.tsv)
-        num_workers: processes number for calculating metrics
-    Returns:
-        AUC
-        MRR
-        nDCG@5
-        nDCG@10
-    """
+def save_predictions(model, directory, num_workers):
     news_dataset = NewsDataset(path.join(directory, 'news_parsed.tsv'))
     news_dataloader = DataLoader(news_dataset,
                                  batch_size=config.batch_size * 16,
@@ -191,8 +128,7 @@ def evaluate(model, directory, num_workers, max_count=sys.maxsize):
                                  pin_memory=True)
 
     news2vector = {}
-    for minibatch in tqdm(news_dataloader,
-                          desc="Calculating vectors for news"):
+    for minibatch in tqdm(news_dataloader, desc="Calculating vectors for news"):
         news_ids = minibatch["news_id"]
         if any(id not in news2vector for id in news_ids):
             news_vector = model.get_news_vector(minibatch)
@@ -200,11 +136,9 @@ def evaluate(model, directory, num_workers, max_count=sys.maxsize):
                 if id not in news2vector:
                     news2vector[id] = vector
 
-    news2vector['PADDED_NEWS'] = torch.zeros(
-        list(news2vector.values())[0].size())
+    news2vector['PADDED_NEWS'] = torch.zeros(list(news2vector.values())[0].size())
 
-    user_dataset = UserDataset(path.join(directory, 'behaviors.tsv'),
-                               '../data/train/user2int.tsv')
+    user_dataset = UserDataset(path.join(directory, 'behaviors.tsv'), '../data/train/user2int.tsv')
     user_dataloader = DataLoader(user_dataset,
                                  batch_size=config.batch_size * 16,
                                  shuffle=False,
@@ -213,19 +147,14 @@ def evaluate(model, directory, num_workers, max_count=sys.maxsize):
                                  pin_memory=True)
 
     user2vector = {}
-    for minibatch in tqdm(user_dataloader,
-                          desc="Calculating vectors for users"):
+    for minibatch in tqdm(user_dataloader, desc="Calculating vectors for users"):
         user_strings = minibatch["clicked_news_string"]
         if any(user_string not in user2vector for user_string in user_strings):
             clicked_news_vector = torch.stack([
-                torch.stack([news2vector[x].to(device) for x in news_list],
-                            dim=0) for news_list in minibatch["clicked_news"]
-            ],
-                                              dim=0).transpose(0, 1)
+                torch.stack([news2vector[x].to(device) for x in news_list], dim=0) for news_list in minibatch["clicked_news"]
+            ], dim=0).transpose(0, 1)
             if model_name == 'LSTUR':
-                user_vector = model.get_user_vector(
-                    minibatch['user'], minibatch['clicked_news_length'],
-                    clicked_news_vector)
+                user_vector = model.get_user_vector(minibatch['user'], minibatch['clicked_news_length'], clicked_news_vector)
             else:
                 user_vector = model.get_user_vector(clicked_news_vector)
             for user, vector in zip(user_strings, user_vector):
@@ -238,54 +167,23 @@ def evaluate(model, directory, num_workers, max_count=sys.maxsize):
                                       shuffle=False,
                                       num_workers=config.num_workers)
 
-    count = 0
-
-    tasks = []
     prediction_output = []
 
-    for minibatch in tqdm(behaviors_dataloader,
-                          desc="Calculating probabilities"):
-        count += 1
-        if count == max_count:
-            break
-
-        candidate_news_vector = torch.stack([
-            news2vector[news[0].split('-')[0]]
-            for news in minibatch['impressions']
-        ],
-                                            dim=0)
+    for minibatch in tqdm(behaviors_dataloader, desc="Calculating probabilities"):
+        candidate_news_vector = torch.stack([news2vector[news[0].split('-')[0]] for news in minibatch['impressions']], dim=0)
         user_vector = user2vector[minibatch['clicked_news_string'][0]]
-        click_probability = model.get_prediction(candidate_news_vector,
-                                                 user_vector)
+        click_probability = model.get_prediction(candidate_news_vector, user_vector)
 
         y_pred = click_probability.tolist()
-        # y_true = [
-        #     int(news[0].split('-')[1]) for news in minibatch['impressions']
-        # ]
-
-        # tasks.append((y_true, y_pred))
-        
-        # Collect predictions for each user session
         prediction_output.append([minibatch['id'][0]] + y_pred)
 
-    # with Pool(processes=num_workers) as pool:
-    #     results = pool.map(calculate_single_user_metric, tasks)
-
-    # Save predictions to CSV file
     predictions_df = pd.DataFrame(prediction_output, columns=["id"] + [f"p{i}" for i in range(1, 16)])
     predictions_df.to_csv('../predictions.csv', index=False)
     print(f"Predictions saved to predictions.csv")
 
-    # aucs, mrrs, ndcg5s, ndcg10s = np.array(results).T
-    # return np.nanmean(aucs), np.nanmean(mrrs), np.nanmean(ndcg5s), np.nanmean(
-    #     ndcg10s)
-
-
 if __name__ == '__main__':
     print('Using device:', device)
     print(f'Evaluating model {model_name}')
-    # Don't need to load pretrained word/entity/context embedding
-    # since it will be loaded from checkpoint later
     model = Model(config).to(device)
     from train import latest_checkpoint  # Avoid circular imports
     checkpoint_path = latest_checkpoint(path.join('../checkpoint', model_name))
@@ -296,9 +194,4 @@ if __name__ == '__main__':
     checkpoint = torch.load(checkpoint_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    evaluate(model, '../data/test', config.num_workers)
-    # auc, mrr, ndcg5, ndcg10 = evaluate(model, '../data/test',
-    #                                    config.num_workers)
-    # print(
-    #     f'AUC: {auc:.4f}\nMRR: {mrr:.4f}\nnDCG@5: {ndcg5:.4f}\nnDCG@10: {ndcg10:.4f}'
-    # )
+    save_predictions(model, '../data/test', config.num_workers)
