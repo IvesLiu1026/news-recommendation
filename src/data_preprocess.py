@@ -31,17 +31,17 @@ def parse_behaviors(source, target, user2int_path):
 
     behaviors = pd.read_table(
         source,
-        header=None,
-        names=['impression_id', 'user', 'time', 'clicked_news', 'impressions'])
+        header=0,
+        names=['id', 'user_id', 'time', 'clicked_news', 'impressions'])
     behaviors.clicked_news.fillna(' ', inplace=True)
     behaviors.impressions = behaviors.impressions.str.split()
 
     user2int = {}
     for row in behaviors.itertuples(index=False):
-        if row.user not in user2int:
-            user2int[row.user] = len(user2int) + 1
+        if row.user_id not in user2int:
+            user2int[row.user_id] = len(user2int) + 1
 
-    pd.DataFrame(user2int.items(), columns=['user',
+    pd.DataFrame(user2int.items(), columns=['user_id',
                                             'int']).to_csv(user2int_path,
                                                            sep='\t',
                                                            index=False)
@@ -50,7 +50,7 @@ def parse_behaviors(source, target, user2int_path):
     )
 
     for row in behaviors.itertuples():
-        behaviors.at[row.Index, 'user'] = user2int[row.user]
+        behaviors.at[row.Index, 'user_id'] = user2int[row.user_id]
 
     for row in tqdm(behaviors.itertuples(), desc="Balancing data"):
         positive = iter([x for x in row.impressions if x.endswith('1')])
@@ -78,8 +78,24 @@ def parse_behaviors(source, target, user2int_path):
         target,
         sep='\t',
         index=False,
-        columns=['user', 'clicked_news', 'candidate_news', 'clicked'])
+        columns=['user_id', 'clicked_news', 'candidate_news', 'clicked'])
 
+def clean_json_string(json_string):
+    """
+    Clean and parse JSON string.
+    Args:
+        json_string: a string containing JSON data
+    Returns:
+        Parsed JSON object or empty list if parsing fails
+    """
+    try:
+        # Strip extra quotes if present
+        json_string = json_string.strip('\'"')
+        return json.loads(json_string)
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
+        print(f"Problematic string: {json_string}")
+        return []
 
 def parse_news(source, target, category2int_path, word2int_path,
                entity2int_path, mode):
@@ -95,20 +111,25 @@ def parse_news(source, target, category2int_path, word2int_path,
     """
     print(f"Parse {source}")
     news = pd.read_table(source,
-                         header=None,
+                         header=0,
                          usecols=[0, 1, 2, 3, 4, 6, 7],
-                         quoting=csv.QUOTE_NONE,
                          names=[
-                             'id', 'category', 'subcategory', 'title',
+                             'news_id', 'category', 'subcategory', 'title',
                              'abstract', 'title_entities', 'abstract_entities'
                          ])  # TODO try to avoid csv.QUOTE_NONE
     news.title_entities.fillna('[]', inplace=True)
     news.abstract_entities.fillna('[]', inplace=True)
     news.fillna(' ', inplace=True)
+    
+    # parse the news title_entities
+    # news.title_entities = news.title_entities.apply(clean_json_string)
+
+    # print the first 5 rows of the news title_entities
+    # print(f"The first row of the news title_entities is \n{news.title_entities[0:5]}")
 
     def parse_row(row):
         new_row = [
-            row.id,
+            row.news_id,
             category2int[row.category] if row.category in category2int else 0,
             category2int[row.subcategory]
             if row.subcategory in category2int else 0,
@@ -149,7 +170,7 @@ def parse_news(source, target, category2int_path, word2int_path,
 
         return pd.Series(new_row,
                          index=[
-                             'id', 'category', 'subcategory', 'title',
+                             'news_id', 'category', 'subcategory', 'title',
                              'abstract', 'title_entities', 'abstract_entities'
                          ])
 
@@ -176,7 +197,7 @@ def parse_news(source, target, category2int_path, word2int_path,
                     word2freq[w] = 1
                 else:
                     word2freq[w] += 1
-
+            
             for e in json.loads(row.title_entities):
                 times = len(e['OccurrenceOffsets']) * e['Confidence']
                 if times > 0:
@@ -257,7 +278,7 @@ def generate_word_embedding(source, target, word2int_path):
     source_embedding = pd.read_table(source,
                                      index_col=0,
                                      sep=' ',
-                                     header=None,
+                                     header=0,
                                      quoting=csv.QUOTE_NONE,
                                      names=range(config.word_embedding_dim))
     # word, vector
@@ -308,9 +329,9 @@ def transform_entity_embedding(source, target, entity2int_path):
 
 
 if __name__ == '__main__':
-    train_dir = './data/train'
-    val_dir = './data/val'
-    test_dir = './data/test'
+    train_dir = '../data/train'
+    val_dir = '../data/val'
+    test_dir = '../data/test'
 
     print('Process data for training')
 
@@ -329,7 +350,7 @@ if __name__ == '__main__':
 
     print('Generate word embedding')
     generate_word_embedding(
-        f'./data/glove/glove.840B.{config.word_embedding_dim}d.txt',
+        f'../data/glove/glove.840B.{config.word_embedding_dim}d.txt',
         path.join(train_dir, 'pretrained_word_embedding.npy'),
         path.join(train_dir, 'word2int.tsv'))
 

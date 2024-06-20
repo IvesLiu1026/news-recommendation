@@ -27,8 +27,8 @@ class BaseDataset(Dataset):
         self.behaviors_parsed = pd.read_table(behaviors_path)
         self.news_parsed = pd.read_table(
             news_path,
-            index_col='id',
-            usecols=['id'] + config.dataset_attributes['news'],
+            index_col='news_id',
+            usecols=['news_id'] + config.dataset_attributes['news'],
             converters={
                 attribute: literal_eval
                 for attribute in set(config.dataset_attributes['news']) & set([

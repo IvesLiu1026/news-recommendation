@@ -65,9 +65,9 @@ def latest_checkpoint(directory):
 
 
 def train():
+    timestamp = datetime.datetime.now().replace(microsecond=0).isoformat().replace(":", "-")
     writer = SummaryWriter(
-        log_dir=
-        f"./runs/{model_name}/{datetime.datetime.now().replace(microsecond=0).isoformat()}{'-' + os.environ['REMARK'] if 'REMARK' in os.environ else ''}"
+        log_dir=f"./runs/{model_name}/{timestamp}{'-' + os.environ['REMARK'] if 'REMARK' in os.environ else ''}"
     )
 
     if not os.path.exists('checkpoint'):
@@ -75,7 +75,7 @@ def train():
 
     try:
         pretrained_word_embedding = torch.from_numpy(
-            np.load('./data/train/pretrained_word_embedding.npy')).float()
+            np.load('../data/train/pretrained_word_embedding.npy')).float()
     except FileNotFoundError:
         pretrained_word_embedding = None
 
@@ -83,14 +83,14 @@ def train():
         try:
             pretrained_entity_embedding = torch.from_numpy(
                 np.load(
-                    './data/train/pretrained_entity_embedding.npy')).float()
+                    '../data/train/pretrained_entity_embedding.npy')).float()
         except FileNotFoundError:
             pretrained_entity_embedding = None
 
         try:
             pretrained_context_embedding = torch.from_numpy(
                 np.load(
-                    './data/train/pretrained_context_embedding.npy')).float()
+                    '../data/train/pretrained_context_embedding.npy')).float()
         except FileNotFoundError:
             pretrained_context_embedding = None
 
@@ -110,8 +110,8 @@ def train():
     else:
         print(models[0])
 
-    dataset = BaseDataset('data/train/behaviors_parsed.tsv',
-                          'data/train/news_parsed.tsv')
+    dataset = BaseDataset('../data/train/behaviors_parsed.tsv',
+                          '../data/train/news_parsed.tsv')
 
     print(f"Load training dataset with size {len(dataset)}.")
 
@@ -138,7 +138,7 @@ def train():
     step = 0
     early_stopping = EarlyStopping()
 
-    checkpoint_dir = os.path.join('./checkpoint', model_name)
+    checkpoint_dir = os.path.join('../checkpoint', model_name)
     Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
     checkpoint_path = latest_checkpoint(checkpoint_dir)
@@ -246,7 +246,7 @@ def train():
         if i % config.num_batches_validate == 0:
             (model if model_name != 'Exp1' else models[0]).eval()
             val_auc, val_mrr, val_ndcg5, val_ndcg10 = evaluate(
-                model if model_name != 'Exp1' else models[0], './data/val',
+                model if model_name != 'Exp1' else models[0], '../data/val',
                 config.num_workers, 200000)
             (model if model_name != 'Exp1' else models[0]).train()
             writer.add_scalar('Validation/AUC', val_auc, step)
@@ -272,9 +272,7 @@ def train():
                              optimizers[0]).state_dict(),
                             'step':
                             step,
-                            'early_stop_value':
-                            -val_auc
-                        }, f"./checkpoint/{model_name}/ckpt-{step}.pth")
+                        }, f"../checkpoint/{model_name}/ckpt-{step}.pth")
                 except OSError as error:
                     print(f"OS error: {error}")
 

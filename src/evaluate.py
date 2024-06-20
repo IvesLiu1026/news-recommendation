@@ -56,7 +56,7 @@ class NewsDataset(Dataset):
         super(NewsDataset, self).__init__()
         self.news_parsed = pd.read_table(
             news_path,
-            usecols=['id'] + config.dataset_attributes['news'],
+            usecols=['news_id'] + config.dataset_attributes['news'],
             converters={
                 attribute: literal_eval
                 for attribute in set(config.dataset_attributes['news']) & set([
@@ -85,9 +85,9 @@ class UserDataset(Dataset):
     def __init__(self, behaviors_path, user2int_path):
         super(UserDataset, self).__init__()
         self.behaviors = pd.read_table(behaviors_path,
-                                       header=None,
+                                       header=0,
                                        usecols=[1, 3],
-                                       names=['user', 'clicked_news'])
+                                       names=['user_id', 'clicked_news'])
         self.behaviors.clicked_news.fillna(' ', inplace=True)
         self.behaviors.drop_duplicates(inplace=True)
         user2int = dict(pd.read_table(user2int_path).values.tolist())
@@ -95,11 +95,11 @@ class UserDataset(Dataset):
         user_missed = 0
         for row in self.behaviors.itertuples():
             user_total += 1
-            if row.user in user2int:
-                self.behaviors.at[row.Index, 'user'] = user2int[row.user]
+            if row.user_id in user2int:
+                self.behaviors.at[row.Index, 'user_id'] = user2int[row.user_id]
             else:
                 user_missed += 1
-                self.behaviors.at[row.Index, 'user'] = 0
+                self.behaviors.at[row.Index, 'user_id'] = 0
         if model_name == 'LSTUR':
             print(f'User miss rate: {user_missed/user_total:.4f}')
 
@@ -110,7 +110,7 @@ class UserDataset(Dataset):
         row = self.behaviors.iloc[idx]
         item = {
             "user":
-            row.user,
+            row.user_id,
             "clicked_news_string":
             row.clicked_news,
             "clicked_news":
@@ -133,10 +133,10 @@ class BehaviorsDataset(Dataset):
     def __init__(self, behaviors_path):
         super(BehaviorsDataset, self).__init__()
         self.behaviors = pd.read_table(behaviors_path,
-                                       header=None,
+                                       header=0,
                                        usecols=range(5),
                                        names=[
-                                           'impression_id', 'user', 'time',
+                                           'id', 'user_id', 'time',
                                            'clicked_news', 'impressions'
                                        ])
         self.behaviors.clicked_news.fillna(' ', inplace=True)
@@ -148,8 +148,8 @@ class BehaviorsDataset(Dataset):
     def __getitem__(self, idx):
         row = self.behaviors.iloc[idx]
         item = {
-            "impression_id": row.impression_id,
-            "user": row.user,
+            "id": row.id,
+            "user_id": row.user_id,
             "time": row.time,
             "clicked_news_string": row.clicked_news,
             "impressions": row.impressions
@@ -193,7 +193,7 @@ def evaluate(model, directory, num_workers, max_count=sys.maxsize):
     news2vector = {}
     for minibatch in tqdm(news_dataloader,
                           desc="Calculating vectors for news"):
-        news_ids = minibatch["id"]
+        news_ids = minibatch["news_id"]
         if any(id not in news2vector for id in news_ids):
             news_vector = model.get_news_vector(minibatch)
             for id, vector in zip(news_ids, news_vector):
@@ -204,7 +204,7 @@ def evaluate(model, directory, num_workers, max_count=sys.maxsize):
         list(news2vector.values())[0].size())
 
     user_dataset = UserDataset(path.join(directory, 'behaviors.tsv'),
-                               'data/train/user2int.tsv')
+                               '../data/train/user2int.tsv')
     user_dataloader = DataLoader(user_dataset,
                                  batch_size=config.batch_size * 16,
                                  shuffle=False,
@@ -241,6 +241,7 @@ def evaluate(model, directory, num_workers, max_count=sys.maxsize):
     count = 0
 
     tasks = []
+    prediction_output = []
 
     for minibatch in tqdm(behaviors_dataloader,
                           desc="Calculating probabilities"):
@@ -258,18 +259,26 @@ def evaluate(model, directory, num_workers, max_count=sys.maxsize):
                                                  user_vector)
 
         y_pred = click_probability.tolist()
-        y_true = [
-            int(news[0].split('-')[1]) for news in minibatch['impressions']
-        ]
+        # y_true = [
+        #     int(news[0].split('-')[1]) for news in minibatch['impressions']
+        # ]
 
-        tasks.append((y_true, y_pred))
+        # tasks.append((y_true, y_pred))
+        
+        # Collect predictions for each user session
+        prediction_output.append([minibatch['id'][0]] + y_pred)
 
-    with Pool(processes=num_workers) as pool:
-        results = pool.map(calculate_single_user_metric, tasks)
+    # with Pool(processes=num_workers) as pool:
+    #     results = pool.map(calculate_single_user_metric, tasks)
 
-    aucs, mrrs, ndcg5s, ndcg10s = np.array(results).T
-    return np.nanmean(aucs), np.nanmean(mrrs), np.nanmean(ndcg5s), np.nanmean(
-        ndcg10s)
+    # Save predictions to CSV file
+    predictions_df = pd.DataFrame(prediction_output, columns=["id"] + [f"p{i}" for i in range(1, 16)])
+    predictions_df.to_csv('../predictions.csv', index=False)
+    print(f"Predictions saved to predictions.csv")
+
+    # aucs, mrrs, ndcg5s, ndcg10s = np.array(results).T
+    # return np.nanmean(aucs), np.nanmean(mrrs), np.nanmean(ndcg5s), np.nanmean(
+    #     ndcg10s)
 
 
 if __name__ == '__main__':
@@ -279,7 +288,7 @@ if __name__ == '__main__':
     # since it will be loaded from checkpoint later
     model = Model(config).to(device)
     from train import latest_checkpoint  # Avoid circular imports
-    checkpoint_path = latest_checkpoint(path.join('./checkpoint', model_name))
+    checkpoint_path = latest_checkpoint(path.join('../checkpoint', model_name))
     if checkpoint_path is None:
         print('No checkpoint file found!')
         exit()
@@ -287,8 +296,9 @@ if __name__ == '__main__':
     checkpoint = torch.load(checkpoint_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    auc, mrr, ndcg5, ndcg10 = evaluate(model, './data/test',
-                                       config.num_workers)
-    print(
-        f'AUC: {auc:.4f}\nMRR: {mrr:.4f}\nnDCG@5: {ndcg5:.4f}\nnDCG@10: {ndcg10:.4f}'
-    )
+    evaluate(model, '../data/test', config.num_workers)
+    # auc, mrr, ndcg5, ndcg10 = evaluate(model, '../data/test',
+    #                                    config.num_workers)
+    # print(
+    #     f'AUC: {auc:.4f}\nMRR: {mrr:.4f}\nnDCG@5: {ndcg5:.4f}\nnDCG@10: {ndcg10:.4f}'
+    # )
